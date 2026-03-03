@@ -1,0 +1,961 @@
+# UniFi API Explorer
+
+```elixir
+Mix.install([
+  {:unifi, path: Path.join(__DIR__, ".")},
+  {:kino, "~> 0.18.0"}
+])
+```
+
+## Setup
+
+Configure the API clients. Set `UNIFI_LOCAL_API_KEY` in your environment before starting Livebook.
+
+```elixir
+req = UniFi.Script.local_client()
+legacy = UniFi.Script.legacy_client()
+sys = UniFi.Script.system_client()
+site_id = UniFi.Script.first_site_id(req)
+
+Kino.Markdown.new("✅ Clients configured, site: `#{site_id}`")
+```
+
+## System Info
+
+Console-level information from the UniFi OS system API.
+
+```elixir
+{:ok, %{status: 200, body: info}} = UniFi.Network.System.info(sys)
+
+rows = for {k, v} <- Enum.sort(info), do: "| `#{k}` | `#{inspect(v)}` |"
+
+"""
+| Key | Value |
+|-----|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Application Info
+
+The Network application version running on the console.
+
+```elixir
+{:ok, %{status: 200, body: body}} = UniFi.Network.Info.get(req)
+
+rows = for {k, v} <- Enum.sort(body), do: "| `#{k}` | `#{inspect(v)}` |"
+
+"""
+| Key | Value |
+|-----|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Sites
+
+Local sites managed by this controller.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => sites}}} = UniFi.Network.Sites.list(req)
+
+rows = for s <- sites, do: "| `#{s["id"]}` | #{s["name"]} |"
+
+"""
+| ID | Name |
+|----|------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Adopted Devices
+
+All UniFi devices adopted on this site.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => devices}}} = UniFi.Network.Devices.list(req, site_id)
+
+rows =
+  for d <- devices do
+    "| #{d["name"] || d["macAddress"]} | #{d["model"]} | #{d["ipAddress"] || "—"} | #{d["state"]} |"
+  end
+
+"""
+| Name | Model | IP | State |
+|------|-------|----|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+```elixir
+case devices do
+  [first | _] ->
+    {:ok, %{status: 200, body: detail}} = UniFi.Network.Devices.get(req, site_id, first["id"])
+    {:ok, %{status: 200, body: stats}} = UniFi.Network.Devices.get_latest_statistics(req, site_id, first["id"])
+
+    detail_rows = for {k, v} <- Enum.sort(detail), do: "| `#{k}` | `#{inspect(v)}` |"
+    stats_rows = for {k, v} <- Enum.sort(stats), do: "| `#{k}` | `#{inspect(v)}` |"
+
+    """
+    ### Device Details: #{first["name"]}
+
+    | Key | Value |
+    |-----|-------|
+    #{Enum.join(detail_rows, "\n")}
+
+    ### Live Statistics
+
+    | Key | Value |
+    |-----|-------|
+    #{Enum.join(stats_rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+
+  _ ->
+    Kino.Markdown.new("*(no devices)*")
+end
+```
+
+## Devices Pending Adoption
+
+Devices that have been discovered but not yet adopted.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => pending}}} = UniFi.Network.Devices.list_pending(req)
+
+case pending do
+  [] ->
+    Kino.Markdown.new("*(none)*")
+
+  _ ->
+    rows = for d <- pending, do: "| #{inspect(d)} |"
+
+    """
+    | Device |
+    |--------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Connected Clients
+
+Currently connected wired and wireless clients.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => clients}}} = UniFi.Network.Clients.list(req, site_id)
+
+rows =
+  clients
+  |> Enum.sort_by(fn c -> String.downcase(c["name"] || c["macAddress"] || "") end)
+  |> Enum.map(fn c ->
+    "| #{c["name"] || c["macAddress"]} | #{c["ipAddress"] || "—"} | `#{c["macAddress"]}` | #{c["type"]} |"
+  end)
+
+"""
+| Name | IP | MAC | Type |
+|------|----|-----|------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+```elixir
+case clients do
+  [first | _] ->
+    {:ok, %{status: 200, body: detail}} = UniFi.Network.Clients.get(req, site_id, first["id"])
+    detail_rows = for {k, v} <- Enum.sort(detail), do: "| `#{k}` | `#{inspect(v)}` |"
+
+    """
+    ### Client Details: #{first["name"] || first["macAddress"]}
+
+    | Key | Value |
+    |-----|-------|
+    #{Enum.join(detail_rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+
+  _ ->
+    Kino.Markdown.new("*(no clients)*")
+end
+```
+
+## Networks
+
+VLAN and subnet configurations, with references showing which devices and clients use each network.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => networks}}} = UniFi.Network.Networks.list(req, site_id)
+
+rows =
+  for n <- networks do
+    "| #{n["name"] || n["id"]} | #{n["vlan"] || "untagged"} | #{n["purpose"] || n["type"] || "?"} |"
+  end
+
+"""
+| Name | VLAN | Purpose |
+|------|------|---------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+```elixir
+case networks do
+  [first | _] ->
+    {:ok, %{status: 200, body: detail}} = UniFi.Network.Networks.get(req, site_id, first["id"])
+    detail_rows = for {k, v} <- Enum.sort(detail), do: "| `#{k}` | `#{inspect(v)}` |"
+
+    """
+    ### Network Details: #{first["name"]}
+
+    | Key | Value |
+    |-----|-------|
+    #{Enum.join(detail_rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+
+  _ ->
+    Kino.Markdown.new("*(no networks)*")
+end
+```
+
+## WiFi Broadcasts
+
+Configured SSIDs and their security settings.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => broadcasts}}} = UniFi.Network.WiFi.list(req, site_id)
+
+rows =
+  for b <- broadcasts do
+    enabled = if b["enabled"] != false, do: "✓", else: "✗"
+    "| #{enabled} | #{b["name"] || b["id"]} |"
+  end
+
+"""
+| Enabled | Name |
+|---------|------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+```elixir
+case broadcasts do
+  [first | _] ->
+    {:ok, %{status: 200, body: detail}} = UniFi.Network.WiFi.get(req, site_id, first["id"])
+    detail_rows = for {k, v} <- Enum.sort(detail), do: "| `#{k}` | `#{inspect(v)}` |"
+
+    """
+    ### WiFi Broadcast Details: #{first["name"]}
+
+    | Key | Value |
+    |-----|-------|
+    #{Enum.join(detail_rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+
+  _ ->
+    Kino.Markdown.new("*(no broadcasts)*")
+end
+```
+
+## WAN Interfaces
+
+Upstream internet connections.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => wans}}} = UniFi.Network.Supporting.list_wans(req, site_id)
+
+rows = for w <- wans, do: "| #{w["name"] || w["id"]} | #{w["ipAddress"] || w["address"] || "—"} |"
+
+"""
+| Name | IP |
+|------|----|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## VPN Servers
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => servers}}} = UniFi.Network.Supporting.list_vpn_servers(req, site_id)
+
+case servers do
+  [] ->
+    Kino.Markdown.new("*(none)*")
+
+  _ ->
+    rows = for s <- servers, do: "| #{s["name"] || s["id"]} | #{s["type"] || "?"} |"
+
+    """
+    | Name | Type |
+    |------|------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## VPN Tunnels
+
+Site-to-site VPN connections.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => tunnels}}} = UniFi.Network.Supporting.list_vpn_tunnels(req, site_id)
+
+case tunnels do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for t <- tunnels, do: "| #{t["name"] || t["id"]} | #{inspect(t)} |"
+
+    """
+    | Name | Data |
+    |------|------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Firewall Zones
+
+Zone-based firewall configuration. Returns an error if zone-based firewall is not enabled.
+
+```elixir
+case UniFi.Network.Firewall.list_zones(req, site_id) do
+  {:ok, %{status: 200, body: %{"data" => zones}}} ->
+    rows = for z <- zones, do: "| `#{z["id"]}` | #{z["name"] || z["id"]} |"
+
+    """
+    | ID | Name |
+    |----|------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+
+  {:ok, %{status: s, body: %{"message" => msg}}} ->
+    Kino.Markdown.new("⚠️ #{s}: #{msg}")
+
+  {:ok, %{status: s}} ->
+    Kino.Markdown.new("⚠️ status #{s}")
+end
+```
+
+## Firewall Policies
+
+```elixir
+case UniFi.Network.Firewall.list_policies(req, site_id) do
+  {:ok, %{status: 200, body: %{"data" => policies}}} ->
+    rows =
+      for p <- policies do
+        enabled = if p["enabled"] != false, do: "✓", else: "✗"
+        "| #{enabled} | #{p["name"] || p["id"]} | #{p["action"] || "?"} |"
+      end
+
+    """
+    | Enabled | Name | Action |
+    |---------|------|--------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+
+  {:ok, %{status: s, body: %{"message" => msg}}} ->
+    Kino.Markdown.new("⚠️ #{s}: #{msg}")
+
+  {:ok, %{status: s}} ->
+    Kino.Markdown.new("⚠️ status #{s}")
+end
+```
+
+## ACL Rules
+
+Access control list rules and their ordering.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => rules}}} = UniFi.Network.ACL.list(req, site_id)
+{:ok, %{status: _, body: ordering}} = UniFi.Network.ACL.get_ordering(req, site_id)
+
+case rules do
+  [] ->
+    Kino.Markdown.new("*(none)*\n\nOrdering: `#{inspect(ordering["orderedAclRuleIds"])}`")
+
+  _ ->
+    rows = for r <- rules, do: "| #{r["name"] || r["id"]} | #{r["action"] || "?"} |"
+
+    """
+    | Name | Action |
+    |------|--------|
+    #{Enum.join(rows, "\n")}
+
+    Ordering: `#{inspect(ordering["orderedAclRuleIds"])}`
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## DNS Policies
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => policies}}} = UniFi.Network.DNS.list(req, site_id)
+
+case policies do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for p <- policies, do: "| #{p["name"] || p["id"]} |"
+
+    """
+    | Name |
+    |------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Traffic Matching Lists
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => lists}}} = UniFi.Network.TrafficMatching.list(req, site_id)
+
+case lists do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for l <- lists, do: "| `#{l["id"]}` | #{l["name"] || l["id"]} |"
+
+    """
+    | ID | Name |
+    |----|------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Hotspot Vouchers
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => vouchers}}} = UniFi.Network.Hotspot.list_vouchers(req, site_id)
+
+case vouchers do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for v <- vouchers, do: "| #{v["code"] || v["id"]} |"
+
+    """
+    | Code |
+    |------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## RADIUS Profiles
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => profiles}}} = UniFi.Network.Supporting.list_radius_profiles(req, site_id)
+
+case profiles do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for p <- profiles, do: "| #{p["name"]} | `#{p["id"]}` |"
+
+    """
+    | Name | ID |
+    |------|----|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Device Tags
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => tags}}} = UniFi.Network.Supporting.list_device_tags(req, site_id)
+
+case tags do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for t <- tags, do: "| `#{t["id"]}` | #{t["name"]} |"
+
+    """
+    | ID | Name |
+    |----|------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## DPI Categories
+
+Deep Packet Inspection application categories.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => cats}}} = UniFi.Network.Supporting.list_dpi_categories(req)
+
+rows = for c <- cats, do: "| #{c["id"]} | #{c["name"]} |"
+
+"""
+| ID | Name |
+|----|------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## DPI Applications
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => apps}}} = UniFi.Network.Supporting.list_dpi_applications(req)
+
+rows = for a <- Enum.take(apps, 30), do: "| #{a["id"]} | #{a["name"]} |"
+
+"""
+| ID | Name |
+|----|------|
+#{Enum.join(rows, "\n")}
+
+*(#{length(apps)} total)*
+"""
+|> Kino.Markdown.new()
+```
+
+## Countries
+
+Regulatory country list for channel/power settings.
+
+```elixir
+{:ok, %{status: 200, body: %{"data" => countries}}} = UniFi.Network.Supporting.list_countries(req)
+
+rows = for c <- countries, do: "| #{c["code"]} | #{c["name"]} |"
+
+"""
+| Code | Name |
+|------|------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: System Info
+
+Controller build, version, data retention, and debug settings from the legacy API.
+
+```elixir
+{:ok, %{body: %{"data" => [info]}}} = UniFi.Network.Legacy.Stats.sysinfo(legacy)
+
+rows = for {k, v} <- Enum.sort(info), do: "| `#{k}` | `#{inspect(v)}` |"
+
+"""
+| Key | Value |
+|-----|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Health
+
+Subsystem health status for WLAN, WAN, LAN, VPN, and WWW.
+
+```elixir
+{:ok, %{body: %{"data" => items}}} = UniFi.Network.Legacy.Stats.health(legacy)
+
+rows =
+  for h <- items do
+    "| #{h["subsystem"]} | #{h["status"]} | #{h["num_adopted"] || 0} |"
+  end
+
+"""
+| Subsystem | Status | Adopted |
+|-----------|--------|---------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Device Stats
+
+Detailed per-device statistics with uptime — much richer than the integration API.
+
+```elixir
+{:ok, %{body: %{"data" => devices}}} = UniFi.Network.Legacy.Stats.devices(legacy)
+
+rows =
+  for d <- devices do
+    name = d["name"] || d["mac"]
+    days = div(d["uptime"] || 0, 86400)
+    "| #{name} | #{d["model"]} | #{days}d |"
+  end
+
+"""
+| Name | Model | Uptime |
+|------|-------|--------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Client Stats
+
+The legacy API returns ~91 fields per client, including signal strength, satisfaction score, SSID, channel, radio info, and DPI data.
+
+```elixir
+{:ok, %{body: %{"data" => clients}}} = UniFi.Network.Legacy.Stats.clients(legacy)
+
+rows =
+  clients
+  |> Enum.sort_by(fn c -> String.downcase(c["hostname"] || c["name"] || c["mac"] || "") end)
+  |> Enum.map(fn c ->
+    name = c["name"] || c["hostname"] || c["mac"]
+    essid = c["essid"] || (if c["is_wired"], do: "wired", else: "?")
+    "| #{name} | #{c["ip"] || "—"} | #{c["signal"] || "—"} | #{c["satisfaction"] || "—"} | #{essid} |"
+  end)
+
+"""
+| Name | IP | Signal | Satisfaction | Network |
+|------|----|--------|--------------|---------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Rogue APs
+
+Neighboring access points detected by your UniFi APs, sorted by signal strength.
+
+```elixir
+{:ok, %{body: %{"data" => aps}}} = UniFi.Network.Legacy.Stats.rogue_aps(legacy)
+
+rows =
+  aps
+  |> Enum.sort_by(& &1["rssi"] || 0, :desc)
+  |> Enum.take(20)
+  |> Enum.map(fn a ->
+    "| #{a["essid"] || "*(hidden)*"} | #{a["channel"]} | #{a["rssi"]} | `#{a["bssid"]}` |"
+  end)
+
+"""
+#{length(aps)} detected, showing top 20 by RSSI:
+
+| SSID | Channel | RSSI | BSSID |
+|------|---------|------|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Events & Alarms
+
+```elixir
+{:ok, %{body: %{"data" => events}}} = UniFi.Network.Legacy.Stats.events(legacy)
+{:ok, %{body: %{"data" => alarms}}} = UniFi.Network.Legacy.Stats.alarms(legacy)
+
+events_md =
+  case events do
+    [] -> "*(no events)*"
+    _ ->
+      rows = for e <- Enum.take(events, 20), do: "| #{e["datetime"]} | #{e["msg"] || e["key"]} |"
+      "| Time | Event |\n|------|-------|\n#{Enum.join(rows, "\n")}"
+  end
+
+alarms_md =
+  case alarms do
+    [] -> "*(no alarms)*"
+    _ ->
+      rows = for a <- Enum.take(alarms, 20), do: "| #{a["datetime"]} | #{a["msg"] || a["key"]} |"
+      "| Time | Alarm |\n|------|-------|\n#{Enum.join(rows, "\n")}"
+  end
+
+"""
+### Events
+
+#{events_md}
+
+### Alarms
+
+#{alarms_md}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: DPI Stats
+
+Deep Packet Inspection traffic statistics.
+
+```elixir
+{:ok, %{body: %{"data" => dpi}}} = UniFi.Network.Legacy.Stats.dpi(legacy)
+
+case dpi do
+  [] -> Kino.Markdown.new("*(none)*")
+  _ ->
+    rows = for d <- dpi, do: "| `#{inspect(d)}` |"
+
+    """
+    | Data |
+    |------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Legacy: Channels & Spectrum
+
+Current channel usage and spectrum scan data from your access points.
+
+```elixir
+{:ok, %{body: %{"data" => channels}}} = UniFi.Network.Legacy.Stats.current_channels(legacy)
+
+rows = for {k, v} <- Enum.sort(hd(channels)), do: "| `#{k}` | `#{inspect(v)}` |"
+
+"""
+| Key | Value |
+|-----|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+```elixir
+{:ok, %{body: %{"data" => scans}}} = UniFi.Network.Legacy.Stats.spectrum_scan(legacy)
+
+rows = for s <- scans, do: "| `#{s["mac"]}` | #{length(s["spectrum_table"] || [])} |"
+
+"""
+| MAC | Channels |
+|-----|----------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Settings
+
+All 35 setting categories. The `mgmt` key contains SSH configuration.
+
+```elixir
+{:ok, %{body: %{"data" => settings}}} = UniFi.Network.Legacy.Settings.list(legacy)
+
+rows = for s <- settings, do: "| `#{s["key"]}` | `#{s["_id"]}` |"
+
+"""
+| Key | ID |
+|-----|----|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Port Forwards
+
+NAT port forwarding rules.
+
+```elixir
+{:ok, %{body: %{"data" => fwds}}} = UniFi.Network.Legacy.PortForwards.list(legacy)
+
+case fwds do
+  [] ->
+    Kino.Markdown.new("*(none)*")
+
+  _ ->
+    rows =
+      for f <- fwds do
+        enabled = if f["enabled"], do: "✓", else: "✗"
+        "| #{enabled} | #{f["name"] || "unnamed"} | #{f["proto"]} | #{f["dst_port"]} | #{f["fwd"]}:#{f["fwd_port"]} |"
+      end
+
+    """
+    | Enabled | Name | Proto | Port | Forward To |
+    |---------|------|-------|------|------------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Legacy: Static Routes
+
+```elixir
+{:ok, %{body: %{"data" => routes}}} = UniFi.Network.Legacy.Routing.list(legacy)
+
+case routes do
+  [] ->
+    Kino.Markdown.new("*(none)*")
+
+  _ ->
+    rows =
+      for r <- routes do
+        enabled = if r["enabled"], do: "✓", else: "✗"
+        "| #{enabled} | #{r["name"]} | #{r["static-route_network"]} | #{r["static-route_nexthop"]} |"
+      end
+
+    """
+    | Enabled | Name | Network | Next Hop |
+    |---------|------|---------|----------|
+    #{Enum.join(rows, "\n")}
+    """
+    |> Kino.Markdown.new()
+end
+```
+
+## Legacy: Firewall Rules & Groups
+
+Traditional (non-zone-based) firewall rules.
+
+```elixir
+{:ok, %{body: %{"data" => rules}}} = UniFi.Network.Legacy.FirewallRules.list(legacy)
+{:ok, %{body: %{"data" => groups}}} = UniFi.Network.Legacy.FirewallRules.list_groups(legacy)
+
+rules_md =
+  case rules do
+    [] -> "*(none)*"
+    _ ->
+      rows = for r <- rules, do: "| #{r["name"] || r["_id"]} | #{r["action"]} | #{r["ruleset"]} |"
+      "| Name | Action | Ruleset |\n|------|--------|--------|\n#{Enum.join(rows, "\n")}"
+  end
+
+groups_md =
+  case groups do
+    [] -> "*(none)*"
+    _ ->
+      rows = for g <- groups, do: "| #{g["name"]} | #{g["group_type"]} |"
+      "| Name | Type |\n|------|------|\n#{Enum.join(rows, "\n")}"
+  end
+
+"""
+### Rules
+
+#{rules_md}
+
+### Groups
+
+#{groups_md}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Known Users
+
+All clients the controller has ever seen — not just currently connected ones.
+
+```elixir
+{:ok, %{body: %{"data" => users}}} = UniFi.Network.Legacy.Users.list(legacy)
+{:ok, %{body: %{"data" => groups}}} = UniFi.Network.Legacy.Users.list_groups(legacy)
+
+user_rows =
+  users
+  |> Enum.sort_by(fn u -> String.downcase(u["name"] || u["mac"] || "") end)
+  |> Enum.map(fn u ->
+    blocked = if u["blocked"], do: "🚫", else: ""
+    "| #{u["name"] || "—"} | `#{u["mac"]}` | #{blocked} |"
+  end)
+
+group_rows = for g <- groups, do: "| #{g["name"]} | `#{g["_id"]}` |"
+
+"""
+#{length(users)} known users:
+
+| Name | MAC | Blocked |
+|------|-----|---------|
+#{Enum.join(user_rows, "\n")}
+
+### User Groups
+
+| Name | ID |
+|------|----|
+#{Enum.join(group_rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: WLAN Config
+
+Full WLAN configuration objects with all settings.
+
+```elixir
+{:ok, %{body: %{"data" => wlans}}} = UniFi.Network.Legacy.WLANConf.list(legacy)
+
+rows =
+  for w <- wlans do
+    enabled = if w["enabled"], do: "✓", else: "✗"
+    "| #{enabled} | #{w["name"]} | #{w["security"]} | #{w["hide_ssid"]} |"
+  end
+
+"""
+| Enabled | Name | Security | Hidden |
+|---------|------|----------|--------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Network Config
+
+Full network configuration objects including WAN, LAN, and VPN networks.
+
+```elixir
+{:ok, %{body: %{"data" => nets}}} = UniFi.Network.Legacy.NetworkConf.list(legacy)
+
+rows = for n <- nets, do: "| #{n["name"]} | #{n["purpose"]} | `#{n["_id"]}` |"
+
+"""
+| Name | Purpose | ID |
+|------|---------|-----|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+## Legacy: Miscellaneous
+
+Port profiles, dynamic DNS, RADIUS, hotspot operators, tags, and current API user.
+
+```elixir
+counts =
+  [
+    {"Port profiles", UniFi.Network.Legacy.Misc.list_port_profiles(legacy)},
+    {"Dynamic DNS", UniFi.Network.Legacy.Misc.list_dynamic_dns(legacy)},
+    {"RADIUS profiles", UniFi.Network.Legacy.Misc.list_radius_profiles(legacy)},
+    {"Hotspot operators", UniFi.Network.Legacy.Misc.list_hotspot_operators(legacy)},
+    {"Hotspot 2.0 configs", UniFi.Network.Legacy.Misc.list_hotspot2_conf(legacy)},
+    {"Tags", UniFi.Network.Legacy.Misc.list_tags(legacy)},
+    {"RADIUS accounts", UniFi.Network.Legacy.Misc.list_accounts(legacy)},
+    {"Channel plans", UniFi.Network.Legacy.Misc.list_channel_plans(legacy)},
+    {"Virtual devices", UniFi.Network.Legacy.Misc.list_virtual_devices(legacy)}
+  ]
+  |> Enum.map(fn {name, {:ok, %{body: %{"data" => d}}}} -> "| #{name} | #{length(d)} |" end)
+
+"""
+| Resource | Count |
+|----------|-------|
+#{Enum.join(counts, "\n")}
+"""
+|> Kino.Markdown.new()
+```
+
+```elixir
+{:ok, %{body: %{"data" => [self]}}} = UniFi.Network.Legacy.Misc.self(legacy)
+
+picked = Map.take(self, ["name", "email", "email_alert_enabled", "is_super", "role"])
+rows = for {k, v} <- Enum.sort(picked), do: "| `#{k}` | `#{inspect(v)}` |"
+
+"""
+### Current API User
+
+| Key | Value |
+|-----|-------|
+#{Enum.join(rows, "\n")}
+"""
+|> Kino.Markdown.new()
+```
