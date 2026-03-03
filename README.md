@@ -2,6 +2,11 @@
 
 Elixir client for the UniFi Network API — both the official integration API and the undocumented legacy controller API.
 
+For example in [Elixir LiveBook](https://livebook.dev) you can explore the API:
+
+<img width="1811" height="1184" alt="image" src="https://github.com/user-attachments/assets/e1fee646-2161-48e9-9f3d-822e3318c649" />
+
+
 ## Prerequisites
 
 - Elixir 1.17+
