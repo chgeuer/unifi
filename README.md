@@ -12,9 +12,11 @@ Elixir client for the UniFi Network API — both the official integration API an
 ### 1. Create a local API key
 
 1. Open your console's web UI (e.g., `https://192.168.1.1`)
-2. Navigate to **Settings → System → Admins & Roles**
+2. Navigate to **Integrations (the power plug symbol at the left bottom)**
 3. Under **API Keys**, click **Create New API Key**
 4. Copy the key (it's shown only once)
+
+<img width="1306" height="955" alt="image" src="https://github.com/user-attachments/assets/9733a463-4b31-461f-b12f-adeba5f688c2" />
 
 ### 2. Set the environment variable
 
